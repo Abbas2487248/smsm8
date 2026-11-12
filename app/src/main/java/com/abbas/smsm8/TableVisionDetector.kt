@@ -15,8 +15,14 @@ import kotlin.math.sqrt
  * only compact, round, cloth-surrounded components as balls.
  */
 object TableVisionDetector {
-    data class Result(val table: Rect?, val balls: List<PointF>)
+    data class Result(
+        val table: Rect?,
+        val balls: List<PointF>,
+        val cueBall: PointF? = null,
+        val aimDirection: PointF? = null
+    )
 
+    private data class Candidate(val point: PointF, val saturation: Float, val value: Float)
     private data class Track(val point: PointF, val hits: Int, val missed: Int = 0)
     private var previousTracks: List<Track> = emptyList()
     private var previousTable: Rect? = null
@@ -164,7 +170,7 @@ object TableVisionDetector {
         val bottom = (maxY - marginY).coerceAtLeast(top)
 
         val visited = BooleanArray(count)
-        val candidates = mutableListOf<PointF>()
+        val candidates = mutableListOf<Candidate>()
         // On a standard pool table the ball diameter is about 1/16 of its
         // long dimension. Use that scale instead of accepting tiny speckles.
         val expectedDiameter = ((maxX - minX + 1) / 16f).coerceAtLeast(4f)
@@ -178,6 +184,8 @@ object TableVisionDetector {
                 val start = startY * sampleWidth + startX
                 if (cloth[start] || visited[start]) continue
                 var area = 0
+                var saturationSum = 0f
+                var valueSum = 0f
                 var cMinX = startX
                 var cMaxX = startX
                 var cMinY = startY
@@ -189,6 +197,8 @@ object TableVisionDetector {
                     val x = index % sampleWidth
                     val y = index / sampleWidth
                     area++
+                    saturationSum += saturations[index]
+                    valueSum += values[index]
                     cMinX = min(cMinX, x)
                     cMaxX = max(cMaxX, x)
                     cMinY = min(cMinY, y)
@@ -211,9 +221,9 @@ object TableVisionDetector {
                 val ratio = boxWidth.toFloat() / boxHeight.toFloat()
                 val fill = area.toFloat() / (boxWidth * boxHeight).coerceAtLeast(1)
                 val diameter = (boxWidth + boxHeight) * 0.5f
-                val roundEnough = ratio in 0.78f..1.28f && fill >= 0.62f
-                val ballSized = diameter in minDiameter..maxDiameter &&
-                    area in minArea..maxArea
+                val roundEnough = ratio in 0.62f..1.55f && fill >= 0.36f
+                val ballSized = diameter in (minDiameter * 0.72f)..(maxDiameter * 1.18f) &&
+                    area in (minArea * 0.45f)..(maxArea * 1.35f)
 
                 // A true ball should be surrounded by table cloth on most of
                 // its perimeter. This rejects holes and stray screen markings.
@@ -235,12 +245,16 @@ object TableVisionDetector {
                         }
                     }
                 }
-                val enclosed = perimeter > 0 && clothNeighbors.toFloat() / perimeter >= 0.68f
+                val enclosed = perimeter > 0 && clothNeighbors.toFloat() / perimeter >= 0.42f
 
                 if (roundEnough && ballSized && enclosed) {
-                    candidates.add(PointF(
-                        (cMinX + cMaxX) * 0.5f * SAMPLE_STEP,
-                        (cMinY + cMaxY) * 0.5f * SAMPLE_STEP
+                    candidates.add(Candidate(
+                        PointF(
+                            (cMinX + cMaxX) * 0.5f * SAMPLE_STEP,
+                            (cMinY + cMaxY) * 0.5f * SAMPLE_STEP
+                        ),
+                        saturationSum / area.coerceAtLeast(1),
+                        valueSum / area.coerceAtLeast(1)
                     ))
                 }
             }
@@ -260,8 +274,8 @@ object TableVisionDetector {
                 if (usedPrevious[i]) continue
                 val old = previousTracks[i].point
                 val distance = sqrt(
-                    (candidate.x - old.x) * (candidate.x - old.x) +
-                    (candidate.y - old.y) * (candidate.y - old.y)
+                    (candidate.point.x - old.x) * (candidate.point.x - old.x) +
+                    (candidate.point.y - old.y) * (candidate.point.y - old.y)
                 )
                 if (distance < bestDistance) {
                     bestDistance = distance
@@ -273,9 +287,9 @@ object TableVisionDetector {
             if (matched) usedPrevious[bestIndex] = true
             val hits = (oldTrack?.hits ?: 0) + 1
             val point = if (oldTrack != null) PointF(
-                oldTrack.point.x * 0.8f + candidate.x * 0.2f,
-                oldTrack.point.y * 0.8f + candidate.y * 0.2f
-            ) else candidate
+                oldTrack.point.x * 0.8f + candidate.point.x * 0.2f,
+                oldTrack.point.y * 0.8f + candidate.point.y * 0.2f
+            ) else candidate.point
             nextTracks.add(Track(point, hits))
             if (hits >= REQUIRED_FRAMES) stableBalls.add(point)
         }
@@ -289,6 +303,77 @@ object TableVisionDetector {
             }
         }
         previousTracks = nextTracks
-        return Result(table, stableBalls)
+
+        // The cue ball is normally the brightest, least-saturated ball.
+        val cueCandidate = limitedCandidates
+            .filter { it.saturation <= 0.38f && it.value >= 0.62f }
+            .maxByOrNull { it.value - it.saturation * 0.65f }
+        val cueBall = cueCandidate?.let { candidate ->
+            stableBalls.minByOrNull { point ->
+                val dx = point.x - candidate.point.x
+                val dy = point.y - candidate.point.y
+                dx * dx + dy * dy
+            }?.takeIf { point ->
+                val dx = point.x - candidate.point.x
+                val dy = point.y - candidate.point.y
+                dx * dx + dy * dy <= expectedDiameter * expectedDiameter * SAMPLE_STEP * SAMPLE_STEP
+            }
+        }
+        val aimDirection = cueBall?.let {
+            estimateShotDirection(it, expectedDiameter * SAMPLE_STEP * 0.5f,
+                sampleWidth, sampleHeight, saturations, values, cloth)
+        }
+        return Result(table, stableBalls, cueBall, aimDirection)
+    }
+
+    /** Finds the cue shaft behind the white ball and returns the opposite (shot) direction. */
+    private fun estimateShotDirection(
+        cue: PointF,
+        ballRadiusPixels: Float,
+        sampleWidth: Int,
+        sampleHeight: Int,
+        saturation: FloatArray,
+        value: FloatArray,
+        cloth: BooleanArray
+    ): PointF? {
+        val cx = cue.x / SAMPLE_STEP
+        val cy = cue.y / SAMPLE_STEP
+        val radius = ballRadiusPixels / SAMPLE_STEP
+        var bestAngle = 0f
+        var bestScore = 0f
+        for (degree in 0 until 360 step 3) {
+            val angle = Math.toRadians(degree.toDouble())
+            val ux = kotlin.math.cos(angle).toFloat()
+            val uy = kotlin.math.sin(angle).toFloat()
+            val px = -uy
+            val py = ux
+            var score = 0f
+            var samples = 0
+            var distance = radius * 1.7f
+            while (distance <= radius * 9.0f) {
+                var bestAtDistance = 0f
+                for (offset in -1..1) {
+                    val x = (cx + ux * distance + px * offset).toInt()
+                    val y = (cy + uy * distance + py * offset).toInt()
+                    if (x !in 0 until sampleWidth || y !in 0 until sampleHeight) continue
+                    val index = y * sampleWidth + x
+                    if (!cloth[index] && saturation[index] in 0.08f..0.82f &&
+                        value[index] in 0.22f..0.96f) bestAtDistance = 1f
+                }
+                score += bestAtDistance
+                samples++
+                distance += 1.25f
+            }
+            if (samples > 0) {
+                val normalized = score / samples
+                if (normalized > bestScore) {
+                    bestScore = normalized
+                    bestAngle = degree.toFloat()
+                }
+            }
+        }
+        if (bestScore < 0.28f) return null
+        val radians = Math.toRadians(bestAngle.toDouble())
+        return PointF(-kotlin.math.cos(radians).toFloat(), -kotlin.math.sin(radians).toFloat())
     }
 }
