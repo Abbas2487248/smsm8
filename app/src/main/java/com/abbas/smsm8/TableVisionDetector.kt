@@ -53,9 +53,12 @@ object TableVisionDetector {
         val roiRight = sampleWidth * 9 / 10
         val roiTop = sampleHeight / 10
         val roiBottom = sampleHeight * 9 / 10
-        for (sy in roiTop until roiBottom) {
+        // Read HSV for the entire frame. Only the central playing area votes
+        // for the dominant hue, but table-boundary detection must see every row
+        // and column (the table can extend into the bottom 10% of the display).
+        for (sy in 0 until sampleHeight) {
             val y = min(sy * SAMPLE_STEP, image.height - 1)
-            for (sx in roiLeft until roiRight) {
+            for (sx in 0 until sampleWidth) {
                 val x = min(sx * SAMPLE_STEP, image.width - 1)
                 val offset = base + y * rowStride + x * pixelStride
                 if (offset + 2 >= buffer.limit()) continue
@@ -67,7 +70,9 @@ object TableVisionDetector {
                 hues[index] = hsv[0]
                 saturations[index] = hsv[1]
                 values[index] = hsv[2]
-                if (hsv[1] >= 0.28f && hsv[2] in 0.16f..0.96f) {
+                if (sx in roiLeft until roiRight && sy in roiTop until roiBottom &&
+                    hsv[1] >= 0.24f && hsv[2] in 0.12f..0.99f
+                ) {
                     val bin = ((hsv[0] / 360f) * HUE_BINS).toInt().coerceIn(0, HUE_BINS - 1)
                     histogram[bin]++
                 }
@@ -91,58 +96,42 @@ object TableVisionDetector {
                 values[i] in 0.10f..0.99f && delta <= 44f
         }
 
-        // Largest connected region of the dominant cloth color is the table.
-        val visitedCloth = BooleanArray(count)
-        val queue = ArrayDeque<Int>()
-        var bestArea = 0
-        var minX = 0
-        var minY = 0
-        var maxX = -1
-        var maxY = -1
-        for (start in cloth.indices) {
-            if (!cloth[start] || visitedCloth[start]) continue
-            var area = 0
-            var cMinX = start % sampleWidth
-            var cMaxX = cMinX
-            var cMinY = start / sampleWidth
-            var cMaxY = cMinY
-            visitedCloth[start] = true
-            queue.add(start)
-            while (queue.isNotEmpty()) {
-                val index = queue.removeFirst()
-                val x = index % sampleWidth
-                val y = index / sampleWidth
-                area++
-                cMinX = min(cMinX, x)
-                cMaxX = max(cMaxX, x)
-                cMinY = min(cMinY, y)
-                cMaxY = max(cMaxY, y)
-                for (dy in -1..1) for (dx in -1..1) {
-                    if (dx == 0 && dy == 0) continue
-                    val nx = x + dx
-                    val ny = y + dy
-                    if (nx !in 0 until sampleWidth || ny !in 0 until sampleHeight) continue
-                    val next = ny * sampleWidth + nx
-                    if (cloth[next] && !visitedCloth[next]) {
-                        visitedCloth[next] = true
-                        queue.add(next)
-                    }
-                }
-            }
-            if (area > bestArea) {
-                bestArea = area
-                minX = cMinX
-                maxX = cMaxX
-                minY = cMinY
-                maxY = cMaxY
-            }
+        // Pick the largest cloth component, but reject implausible thin bands.
+        // The previous detector accepted a long horizontal stripe as the whole table.
+        var region = findLargestRegion(cloth, sampleWidth, sampleHeight)
+        fun plausible(candidate: Region?): Boolean {
+            if (candidate == null) return false
+            val regionWidth = candidate.maxX - candidate.minX + 1
+            val regionHeight = candidate.maxY - candidate.minY + 1
+            val aspect = regionWidth.toFloat() / regionHeight.coerceAtLeast(1)
+            return candidate.area >= (count * 0.015f).toInt() &&
+                regionWidth >= sampleWidth * 0.35f &&
+                regionHeight >= sampleHeight * 0.30f &&
+                aspect in 1.25f..2.85f
         }
 
-        if (bestArea < (count * 0.015f).toInt() || maxX <= minX || maxY <= minY) {
+        if (!plausible(region)) {
+            // Hay Day/8 Ball Pool blue felt is cyan-to-blue. This fallback is
+            // deliberately independent of the single dominant histogram bin,
+            // which can be biased by highlights, overlays, or color gradients.
+            for (i in 0 until count) {
+                cloth[i] = hues[i] in 145f..260f &&
+                    saturations[i] >= 0.08f && values[i] in 0.08f..0.995f
+            }
+            region = findLargestRegion(cloth, sampleWidth, sampleHeight)
+        }
+
+        if (!plausible(region)) {
             previousTracks = emptyList()
             previousTable = null
             return Result(null, emptyList())
         }
+
+        val bestArea = region!!.area
+        val minX = region.minX
+        val minY = region.minY
+        val maxX = region.maxX
+        val maxY = region.maxY
 
         val rawTable = Rect(
             minX * SAMPLE_STEP,
@@ -331,6 +320,56 @@ object TableVisionDetector {
                 sampleWidth, sampleHeight, saturations, values, cloth)
         }
         return Result(table, stableBalls, cueBall, aimDirection)
+    }
+
+    private data class Region(
+        val area: Int,
+        val minX: Int,
+        val minY: Int,
+        val maxX: Int,
+        val maxY: Int
+    )
+
+    /** Returns the bounding box of the largest 8-connected true component. */
+    private fun findLargestRegion(mask: BooleanArray, width: Int, height: Int): Region? {
+        val visited = BooleanArray(mask.size)
+        val queue = ArrayDeque<Int>()
+        var best: Region? = null
+        for (start in mask.indices) {
+            if (!mask[start] || visited[start]) continue
+            var area = 0
+            var minX = start % width
+            var maxX = minX
+            var minY = start / width
+            var maxY = minY
+            visited[start] = true
+            queue.add(start)
+            while (queue.isNotEmpty()) {
+                val index = queue.removeFirst()
+                val x = index % width
+                val y = index / width
+                area++
+                minX = min(minX, x)
+                maxX = max(maxX, x)
+                minY = min(minY, y)
+                maxY = max(maxY, y)
+                for (dy in -1..1) for (dx in -1..1) {
+                    if (dx == 0 && dy == 0) continue
+                    val nx = x + dx
+                    val ny = y + dy
+                    if (nx !in 0 until width || ny !in 0 until height) continue
+                    val next = ny * width + nx
+                    if (mask[next] && !visited[next]) {
+                        visited[next] = true
+                        queue.add(next)
+                    }
+                }
+            }
+            if (best == null || area > best.area) {
+                best = Region(area, minX, minY, maxX, maxY)
+            }
+        }
+        return best
     }
 
     /** Finds the cue shaft behind the white ball and returns the opposite (shot) direction. */
