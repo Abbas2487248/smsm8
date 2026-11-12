@@ -223,7 +223,7 @@ object TableVisionDetector {
                 val diameter = (boxWidth + boxHeight) * 0.5f
                 val roundEnough = ratio in 0.62f..1.55f && fill >= 0.36f
                 val ballSized = diameter in (minDiameter * 0.72f)..(maxDiameter * 1.18f) &&
-                    area in (minArea * 0.45f)..(maxArea * 1.35f)
+                    area.toFloat() in (minArea * 0.45f)..(maxArea * 1.35f)
 
                 // A true ball should be surrounded by table cloth on most of
                 // its perimeter. This rejects holes and stray screen markings.
