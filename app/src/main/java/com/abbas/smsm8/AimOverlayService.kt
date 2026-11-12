@@ -108,6 +108,25 @@ class AimOverlayService : Service() {
             style = Paint.Style.STROKE
             pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 9f), 0f)
         }
+        // Thin alternate routes mirror the multi-colour trajectory style in the reference.
+        private val alternateRoutePaints = listOf(
+            Color.rgb(80, 245, 115),
+            Color.rgb(55, 145, 255),
+            Color.rgb(255, 90, 95),
+            Color.rgb(255, 175, 95)
+        ).map { routeColor ->
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(205, Color.red(routeColor), Color.green(routeColor), Color.blue(routeColor))
+                strokeWidth = 2.6f
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+            }
+        }
+        private val routePointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            strokeWidth = 2f
+            style = Paint.Style.STROKE
+        }
 
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
@@ -171,6 +190,38 @@ class AimOverlayService : Service() {
                 if (vy > 0.0001f) distance = minOf(distance, (maxY - y) / vy)
                 if (vy < -0.0001f) distance = minOf(distance, (minY - y) / vy)
                 return distance.coerceAtLeast(0f)
+            }
+
+            // Draw a small set of alternative cue-to-ball routes, each extended to the cushion.
+            // These are visual aiming possibilities, not a claim of exact collision physics.
+            val alternativeTargets = frame.result.balls
+                .map { PointF(mapX(it.x), mapY(it.y)) }
+                .filter { point ->
+                    val vx = point.x - cueX
+                    val vy = point.y - cueY
+                    vx * vx + vy * vy > ballDiameter * ballDiameter * 2.2f
+                }
+                .sortedBy { point ->
+                    val vx = point.x - cueX
+                    val vy = point.y - cueY
+                    vx * vx + vy * vy
+                }
+                .take(8)
+            alternativeTargets.forEachIndexed { index, target ->
+                val vx = target.x - cueX
+                val vy = target.y - cueY
+                val routeLength = kotlin.math.sqrt(vx * vx + vy * vy).coerceAtLeast(0.001f)
+                val ux = vx / routeLength
+                val uy = vy / routeLength
+                val rail = distanceToRail(target.x, target.y, ux, uy)
+                val paint = alternateRoutePaints[index % alternateRoutePaints.size]
+                canvas.drawLine(cueX, cueY, target.x, target.y, paint)
+                canvas.drawLine(
+                    target.x, target.y,
+                    target.x + ux * rail, target.y + uy * rail,
+                    paint
+                )
+                canvas.drawCircle(target.x, target.y, (ballDiameter * 0.34f).coerceIn(4f, 8f), routePointPaint)
             }
 
             val railDistance = distanceToRail(cueX, cueY, dx, dy)
