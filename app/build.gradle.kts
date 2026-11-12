@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.abbas.s​​msm8"
+    namespace = "com.abbas.smsm8"
     compileSdk = 35
 
     defaultConfig {
@@ -13,10 +13,6 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-    }
-
-    buildFeatures {
-        viewBinding = false
     }
 
     compileOptions {
