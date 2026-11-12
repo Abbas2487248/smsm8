@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.PointF
 import android.graphics.RectF
 import android.os.IBinder
 import android.view.Gravity
@@ -138,7 +139,7 @@ class AimOverlayService : Service() {
                 val vy = by - cueY
                 val projection = vx * dx + vy * dy
                 if (projection <= ballDiameter || projection >= railDistance) continue
-                val perpendicular = abs(vx * dy - vy * dx)
+                val perpendicular = kotlin.math.abs(vx * dy - vy * dx)
                 if (perpendicular <= ballDiameter * 0.78f && projection < hitDistance) {
                     hit = PointF(bx, by)
                     hitDistance = projection
