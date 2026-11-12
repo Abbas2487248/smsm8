@@ -413,10 +413,10 @@ object TableVisionDetector {
             for (i in 0 until lines.rows()) {
                 val segment = lines.get(i, 0) ?: continue
                 if (segment.size < 4) continue
-                val x1 = segment[0]
-                val y1 = segment[1]
-                val x2 = segment[2]
-                val y2 = segment[3]
+                val x1 = segment[0].toFloat()
+                val y1 = segment[1].toFloat()
+                val x2 = segment[2].toFloat()
+                val y2 = segment[3].toFloat()
                 val vx = x2 - x1
                 val vy = y2 - y1
                 val length = kotlin.math.sqrt(vx * vx + vy * vy)
