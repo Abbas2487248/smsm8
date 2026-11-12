@@ -4,6 +4,10 @@ import android.graphics.Color
 import android.graphics.PointF
 import android.graphics.Rect
 import android.media.Image
+import org.opencv.android.OpenCVLoader
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.imgproc.Imgproc
 import java.util.ArrayDeque
 import kotlin.math.abs
 import kotlin.math.max
@@ -28,6 +32,7 @@ object TableVisionDetector {
     private var previousTable: Rect? = null
 
     private const val SAMPLE_STEP = 3
+    private val openCvReady by lazy { OpenCVLoader.initLocal() }
     private const val REQUIRED_FRAMES = 2
     private const val HUE_BINS = 36
 
@@ -44,6 +49,7 @@ object TableVisionDetector {
         val hues = FloatArray(count)
         val saturations = FloatArray(count)
         val values = FloatArray(count)
+        val blackness = ByteArray(count)
         val histogram = IntArray(HUE_BINS)
         val hsv = FloatArray(3)
 
@@ -70,6 +76,7 @@ object TableVisionDetector {
                 hues[index] = hsv[0]
                 saturations[index] = hsv[1]
                 values[index] = hsv[2]
+                blackness[index] = (255 - max(red, max(green, blue))).toByte()
                 if (sx in roiLeft until roiRight && sy in roiTop until roiBottom &&
                     hsv[1] >= 0.24f && hsv[2] in 0.12f..0.99f
                 ) {
@@ -319,7 +326,7 @@ object TableVisionDetector {
         // is detected with sufficient confidence.
         val aimDirection = cueBall?.let {
             estimateShotDirection(it, expectedDiameter * SAMPLE_STEP * 0.5f,
-                sampleWidth, sampleHeight, saturations, values, cloth)
+                sampleWidth, sampleHeight, blackness)
         }
         return Result(table, stableBalls, cueBall, aimDirection)
     }
@@ -374,54 +381,89 @@ object TableVisionDetector {
         return best
     }
 
-    /** Finds the cue shaft behind the white ball and returns the opposite (shot) direction. */
+    /**
+     * Detect the cue shaft as actual line segments in the dark-channel image.
+     * This adapts the CMYK/K-channel + Line Segment Detector approach used by
+     * open-source 8-ball assistants. A segment is accepted only when it is
+     * long and its closest point lies beside the detected cue-ball center.
+     */
     private fun estimateShotDirection(
         cue: PointF,
         ballRadiusPixels: Float,
         sampleWidth: Int,
         sampleHeight: Int,
-        saturation: FloatArray,
-        value: FloatArray,
-        cloth: BooleanArray
+        blackness: ByteArray
     ): PointF? {
-        val cx = cue.x / SAMPLE_STEP
-        val cy = cue.y / SAMPLE_STEP
-        val radius = ballRadiusPixels / SAMPLE_STEP
-        var bestAngle = 0f
-        var bestScore = 0f
-        for (degree in 0 until 360 step 6) {
-            val angle = Math.toRadians(degree.toDouble())
-            val ux = kotlin.math.cos(angle).toFloat()
-            val uy = kotlin.math.sin(angle).toFloat()
-            val px = -uy
-            val py = ux
-            var score = 0f
-            var samples = 0
-            var distance = radius * 1.7f
-            while (distance <= radius * 9.0f) {
-                var bestAtDistance = 0f
-                for (offset in -1..1) {
-                    val x = (cx + ux * distance + px * offset).toInt()
-                    val y = (cy + uy * distance + py * offset).toInt()
-                    if (x !in 0 until sampleWidth || y !in 0 until sampleHeight) continue
-                    val index = y * sampleWidth + x
-                    if (!cloth[index] && saturation[index] in 0.08f..0.82f &&
-                        value[index] in 0.22f..0.96f) bestAtDistance = 1f
+        if (!openCvReady || blackness.size != sampleWidth * sampleHeight) return null
+
+        val gray = Mat(sampleHeight, sampleWidth, CvType.CV_8UC1)
+        val lines = Mat()
+        try {
+            gray.put(0, 0, blackness)
+            val detector = Imgproc.createLineSegmentDetector()
+            detector.detect(gray, lines)
+            if (lines.empty()) return null
+
+            val cx = cue.x / SAMPLE_STEP
+            val cy = cue.y / SAMPLE_STEP
+            val radius = (ballRadiusPixels / SAMPLE_STEP).coerceAtLeast(2f)
+            var bestDirection: PointF? = null
+            var bestScore = 0f
+
+            for (i in 0 until lines.rows()) {
+                val segment = lines.get(i, 0) ?: continue
+                if (segment.size < 4) continue
+                val x1 = segment[0]
+                val y1 = segment[1]
+                val x2 = segment[2]
+                val y2 = segment[3]
+                val vx = x2 - x1
+                val vy = y2 - y1
+                val length = kotlin.math.sqrt(vx * vx + vy * vy)
+                if (length < radius * 2.4f) continue
+
+                val lengthSquared = vx * vx + vy * vy
+                val t = (((cx - x1) * vx + (cy - y1) * vy) /
+                    lengthSquared.coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
+                val nearX = x1 + t * vx
+                val nearY = y1 + t * vy
+                val offX = nearX - cx
+                val offY = nearY - cy
+                val distance = kotlin.math.sqrt(offX * offX + offY * offY)
+
+                // The shaft should approach the cue ball from just outside its edge.
+                if (distance < radius * 0.45f || distance > radius * 1.9f) continue
+
+                val d1x = x1 - cx
+                val d1y = y1 - cy
+                val d2x = x2 - cx
+                val d2y = y2 - cy
+                val farX: Float
+                val farY: Float
+                if (d1x * d1x + d1y * d1y >= d2x * d2x + d2y * d2y) {
+                    farX = d1x
+                    farY = d1y
+                } else {
+                    farX = d2x
+                    farY = d2y
                 }
-                score += bestAtDistance
-                samples++
-                distance += 2.0f
-            }
-            if (samples > 0) {
-                val normalized = score / samples
-                if (normalized > bestScore) {
-                    bestScore = normalized
-                    bestAngle = degree.toFloat()
+                val farLength = kotlin.math.sqrt(farX * farX + farY * farY)
+                if (farLength < radius * 2.0f) continue
+
+                // The cue points away from the shaft and through the cue-ball center.
+                val score = length / (1f + distance / radius)
+                if (score > bestScore) {
+                    bestScore = score
+                    bestDirection = PointF(-farX / farLength, -farY / farLength)
                 }
             }
+            return bestDirection
+        } catch (error: Exception) {
+            android.util.Log.e("smsm8-vision", "Cue line detection failed", error)
+            return null
+        } finally {
+            lines.release()
+            gray.release()
         }
-        if (bestScore < 0.28f) return null
-        val radians = Math.toRadians(bestAngle.toDouble())
-        return PointF(-kotlin.math.cos(radians).toFloat(), -kotlin.math.sin(radians).toFloat())
     }
 }
