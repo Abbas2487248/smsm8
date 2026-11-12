@@ -28,7 +28,7 @@ object TableVisionDetector {
     private var previousTable: Rect? = null
 
     private const val SAMPLE_STEP = 3
-    private const val REQUIRED_FRAMES = 3
+    private const val REQUIRED_FRAMES = 2
     private const val HUE_BINS = 36
 
     @Synchronized
@@ -341,7 +341,7 @@ object TableVisionDetector {
         val radius = ballRadiusPixels / SAMPLE_STEP
         var bestAngle = 0f
         var bestScore = 0f
-        for (degree in 0 until 360 step 3) {
+        for (degree in 0 until 360 step 6) {
             val angle = Math.toRadians(degree.toDouble())
             val ux = kotlin.math.cos(angle).toFloat()
             val uy = kotlin.math.sin(angle).toFloat()
@@ -362,7 +362,7 @@ object TableVisionDetector {
                 }
                 score += bestAtDistance
                 samples++
-                distance += 1.25f
+                distance += 2.0f
             }
             if (samples > 0) {
                 val normalized = score / samples
