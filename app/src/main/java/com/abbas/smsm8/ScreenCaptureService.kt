@@ -14,6 +14,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
@@ -32,6 +33,8 @@ class ScreenCaptureService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var lastAnalysisAt = 0L
+    private var analysisThread: HandlerThread? = null
+    private var analysisHandler: Handler? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) {
@@ -91,13 +94,15 @@ class ScreenCaptureService : Service() {
         val height = metrics.heightPixels
         val density = metrics.densityDpi
         imageReader = ImageReader.newInstance(width, height, android.graphics.PixelFormat.RGBA_8888, 2)
+        analysisThread = HandlerThread("smsm8-vision").also { it.start() }
+        analysisHandler = Handler(analysisThread!!.looper)
 
         imageReader?.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage()
             if (image != null) {
                 try {
                     val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastAnalysisAt >= 250L) {
+                    if (now - lastAnalysisAt >= 100L) {
                         lastAnalysisAt = now
                         val result = TableVisionDetector.detect(image)
                         AimOverlayService.updateVision(result, image.width, image.height)
@@ -116,7 +121,7 @@ class ScreenCaptureService : Service() {
                     image.close()
                 }
             }
-        }, Handler(Looper.getMainLooper()))
+        }, analysisHandler)
 
         val callback = object : MediaProjection.Callback() {
             override fun onStop() {
@@ -156,6 +161,9 @@ class ScreenCaptureService : Service() {
         virtualDisplay = null
         imageReader?.close()
         imageReader = null
+        analysisThread?.quitSafely()
+        analysisThread = null
+        analysisHandler = null
         projection?.stop()
         projection = null
         stopForeground(STOP_FOREGROUND_REMOVE)
