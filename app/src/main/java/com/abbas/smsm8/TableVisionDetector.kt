@@ -305,9 +305,9 @@ object TableVisionDetector {
         previousTracks = nextTracks
 
         // The cue ball is normally the brightest, least-saturated ball.
+        // Prefer a clearly white ball, but tolerate shaded/anti-aliased cue balls.
         val cueCandidate = limitedCandidates
-            .filter { it.saturation <= 0.38f && it.value >= 0.62f }
-            .maxByOrNull { it.value - it.saturation * 0.65f }
+            .maxByOrNull { (1f - it.saturation) * 0.7f + it.value * 0.3f }
         val cueBall = cueCandidate?.let { candidate ->
             stableBalls.minByOrNull { point ->
                 val dx = point.x - candidate.point.x
@@ -319,10 +319,29 @@ object TableVisionDetector {
                 dx * dx + dy * dy <= expectedDiameter * expectedDiameter * SAMPLE_STEP * SAMPLE_STEP
             }
         }
-        val aimDirection = cueBall?.let {
+
+        // Shaft recognition is uncertain in some game themes. Keep it as the
+        // preferred direction, but fall back to the nearest object ball so the
+        // guide is still visible instead of disappearing completely.
+        val detectedDirection = cueBall?.let {
             estimateShotDirection(it, expectedDiameter * SAMPLE_STEP * 0.5f,
                 sampleWidth, sampleHeight, saturations, values, cloth)
         }
+        val nearestBallDirection = cueBall?.let { cue ->
+            stableBalls
+                .filter { it !== cue && (it.x != cue.x || it.y != cue.y) }
+                .minByOrNull { point ->
+                    val dx = point.x - cue.x
+                    val dy = point.y - cue.y
+                    dx * dx + dy * dy
+                }?.let { target ->
+                    val dx = target.x - cue.x
+                    val dy = target.y - cue.y
+                    val length = sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
+                    PointF(dx / length, dy / length)
+                }
+        }
+        val aimDirection = detectedDirection ?: nearestBallDirection
         return Result(table, stableBalls, cueBall, aimDirection)
     }
 
