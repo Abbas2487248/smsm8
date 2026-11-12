@@ -6,16 +6,22 @@ import android.media.Image
 import java.util.ArrayDeque
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
- * Lightweight first-pass detector for the green pool table and round,
- * non-cloth objects. It reports candidates only; it does not control input.
+ * First-pass pool-table detector. It deliberately favors fewer, steadier
+ * circular candidates over drawing every non-cloth patch as a ball.
  */
 object TableVisionDetector {
     data class Result(val table: Rect?, val balls: List<PointF>)
 
-    private const val SAMPLE_STEP = 3
+    private data class Track(val point: PointF, val hits: Int)
+    private var previousTracks: List<Track> = emptyList()
 
+    private const val SAMPLE_STEP = 3
+    private const val REQUIRED_FRAMES = 2
+
+    @Synchronized
     fun detect(image: Image): Result {
         val plane = image.planes.firstOrNull() ?: return Result(null, emptyList())
         val buffer = plane.buffer
@@ -41,8 +47,8 @@ object TableVisionDetector {
                 val red = buffer.get(offset).toInt() and 0xff
                 val g = buffer.get(offset + 1).toInt() and 0xff
                 val blue = buffer.get(offset + 2).toInt() and 0xff
-                val isCloth = g > 45 && g > red * 1.12f && g > blue * 1.08f &&
-                    (g - red) > 14
+                val isCloth = g > 48 && g > red * 1.16f && g > blue * 1.10f &&
+                    (g - red) > 18 && (g - blue) > 10
                 if (isCloth) {
                     green[sy * sampleWidth + sx] = true
                     minX = min(minX, sx)
@@ -53,7 +59,10 @@ object TableVisionDetector {
             }
         }
 
-        if (maxX <= minX || maxY <= minY) return Result(null, emptyList())
+        if (maxX <= minX || maxY <= minY) {
+            previousTracks = emptyList()
+            return Result(null, emptyList())
+        }
 
         val table = Rect(
             minX * SAMPLE_STEP,
@@ -62,14 +71,21 @@ object TableVisionDetector {
             min((maxY + 1) * SAMPLE_STEP, image.height)
         )
 
-        // Ignore the outer cushion edge; search only within the cloth rectangle.
-        val left = (minX + 5).coerceAtMost(maxX)
-        val right = (maxX - 5).coerceAtLeast(left)
-        val top = (minY + 5).coerceAtMost(maxY)
-        val bottom = (maxY - 5).coerceAtLeast(top)
+        // Search inside the cloth, leaving a wider margin for cushions and rails.
+        val left = (minX + 6).coerceAtMost(maxX)
+        val right = (maxX - 6).coerceAtLeast(left)
+        val top = (minY + 6).coerceAtMost(maxY)
+        val bottom = (maxY - 6).coerceAtLeast(top)
         val visited = BooleanArray(sampleWidth * sampleHeight)
-        val balls = mutableListOf<PointF>()
+        val candidates = mutableListOf<PointF>()
         val queue = ArrayDeque<Int>()
+
+        // A pool ball is roughly one twentieth of the playing-surface width.
+        val expectedDiameter = ((maxX - minX + 1) / 19f).coerceAtLeast(4f)
+        val minDiameter = (expectedDiameter * 0.55f).coerceAtLeast(3f)
+        val maxDiameter = expectedDiameter * 1.55f
+        val minArea = (expectedDiameter * expectedDiameter * 0.22f).toInt().coerceAtLeast(5)
+        val maxArea = (expectedDiameter * expectedDiameter * 1.25f).toInt().coerceAtLeast(minArea + 1)
 
         for (startY in top..bottom) {
             for (startX in left..right) {
@@ -94,16 +110,18 @@ object TableVisionDetector {
                     cMinY = min(cMinY, y)
                     cMaxY = max(cMaxY, y)
 
-                    val neighbors = intArrayOf(
-                        if (x > left) index - 1 else -1,
-                        if (x < right) index + 1 else -1,
-                        if (y > top) index - sampleWidth else -1,
-                        if (y < bottom) index + sampleWidth else -1
-                    )
-                    for (next in neighbors) {
-                        if (next >= 0 && !green[next] && !visited[next]) {
-                            visited[next] = true
-                            queue.add(next)
+                    // Eight-way connectivity keeps sampled round objects together.
+                    for (dy in -1..1) {
+                        for (dx in -1..1) {
+                            if (dx == 0 && dy == 0) continue
+                            val nx = x + dx
+                            val ny = y + dy
+                            if (nx !in left..right || ny !in top..bottom) continue
+                            val next = ny * sampleWidth + nx
+                            if (!green[next] && !visited[next]) {
+                                visited[next] = true
+                                queue.add(next)
+                            }
                         }
                     }
                 }
@@ -111,10 +129,14 @@ object TableVisionDetector {
                 val boxWidth = cMaxX - cMinX + 1
                 val boxHeight = cMaxY - cMinY + 1
                 val ratio = boxWidth.toFloat() / boxHeight.toFloat()
-                if (area in 8..180 && boxWidth in 3..18 && boxHeight in 3..18 &&
-                    ratio in 0.55f..1.8f
-                ) {
-                    balls.add(
+                val fill = area.toFloat() / (boxWidth * boxHeight).coerceAtLeast(1)
+                val diameter = (boxWidth + boxHeight) * 0.5f
+                val roundEnough = ratio in 0.72f..1.38f && fill >= 0.42f
+                val ballSized = diameter in minDiameter..maxDiameter &&
+                    area in minArea..maxArea
+
+                if (roundEnough && ballSized) {
+                    candidates.add(
                         PointF(
                             (cMinX + cMaxX) * 0.5f * SAMPLE_STEP,
                             (cMinY + cMaxY) * 0.5f * SAMPLE_STEP
@@ -124,6 +146,40 @@ object TableVisionDetector {
             }
         }
 
-        return Result(table, balls)
+        // Require a candidate to appear in consecutive frames near the same spot.
+        // This suppresses one-frame noise; it is not a substitute for image calibration.
+        val matchDistance = (expectedDiameter * SAMPLE_STEP * 0.8f).coerceAtLeast(10f)
+        val usedPrevious = BooleanArray(previousTracks.size)
+        val nextTracks = mutableListOf<Track>()
+        val stableBalls = mutableListOf<PointF>()
+
+        for (candidate in candidates) {
+            var bestIndex = -1
+            var bestDistance = Float.MAX_VALUE
+            for (i in previousTracks.indices) {
+                if (usedPrevious[i]) continue
+                val old = previousTracks[i].point
+                val distance = sqrt(
+                    (candidate.x - old.x) * (candidate.x - old.x) +
+                        (candidate.y - old.y) * (candidate.y - old.y)
+                )
+                if (distance < bestDistance) {
+                    bestDistance = distance
+                    bestIndex = i
+                }
+            }
+
+            val hits = if (bestIndex >= 0 && bestDistance <= matchDistance) {
+                usedPrevious[bestIndex] = true
+                previousTracks[bestIndex].hits + 1
+            } else {
+                1
+            }
+            nextTracks.add(Track(candidate, hits))
+            if (hits >= REQUIRED_FRAMES) stableBalls.add(candidate)
+        }
+
+        previousTracks = nextTracks
+        return Result(table, stableBalls)
     }
 }
