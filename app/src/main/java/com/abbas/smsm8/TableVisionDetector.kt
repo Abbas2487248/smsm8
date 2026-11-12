@@ -181,6 +181,8 @@ object TableVisionDetector {
                 var cMaxX = startX
                 var cMinY = startY
                 var cMaxY = startY
+                // A fresh breadth-first queue for this connected component.
+                val queue = ArrayDeque<Int>()
                 visited[start] = true
                 queue.add(start)
                 while (queue.isNotEmpty()) {
