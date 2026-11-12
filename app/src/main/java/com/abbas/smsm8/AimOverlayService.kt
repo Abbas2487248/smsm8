@@ -170,90 +170,29 @@ class AimOverlayService : Service() {
             canvas.drawLine(cueX, cueY - 12f, cueX, cueY + 12f, centerDebug)
 
             val direction = frame.result.aimDirection ?: return
+            val simulation = ShotPhysics.predict(
+                cue = cue,
+                detectedBalls = frame.result.balls,
+                table = RectF(table),
+                direction = direction,
+                radius = table.width() / 32f
+            )
 
-            var dx = direction.x
-            var dy = direction.y
-            val length = kotlin.math.sqrt(dx * dx + dy * dy)
-            if (length < 0.001f) return
-            dx /= length
-            dy /= length
-
-            val minX = left + ballRadius
-            val maxX = right - ballRadius
-            val minY = top + ballRadius
-            val maxY = bottom - ballRadius
-
-            fun distanceToRail(x: Float, y: Float, vx: Float, vy: Float): Float {
-                var distance = Float.POSITIVE_INFINITY
-                if (vx > 0.0001f) distance = minOf(distance, (maxX - x) / vx)
-                if (vx < -0.0001f) distance = minOf(distance, (minX - x) / vx)
-                if (vy > 0.0001f) distance = minOf(distance, (maxY - y) / vy)
-                if (vy < -0.0001f) distance = minOf(distance, (minY - y) / vy)
-                return distance.coerceAtLeast(0f)
-            }
-
-            // Do not draw guessed routes to nearby balls. Trajectories are
-            // rendered only after the cue-stick direction is detected reliably.
-
-            val railDistance = distanceToRail(cueX, cueY, dx, dy)
-            val balls = frame.result.balls
-            var hit: PointF? = null
-            var hitDistance = Float.POSITIVE_INFINITY
-            var hitOffset = 0f
-            for (ball in balls) {
-                val bx = mapX(ball.x)
-                val by = mapY(ball.y)
-                val vx = bx - cueX
-                val vy = by - cueY
-                val projection = vx * dx + vy * dy
-                if (projection <= ballDiameter || projection >= railDistance) continue
-                val perpendicular = kotlin.math.abs(vx * dy - vy * dx)
-                if (perpendicular <= ballDiameter * 0.78f && projection < hitDistance) {
-                    hit = PointF(bx, by)
-                    hitDistance = projection
-                    hitOffset = perpendicular / ballDiameter
+            // Render the simulated cue-ball and object-ball paths in overlay space.
+            for (path in simulation.paths) {
+                val paint = if (path.isCueBall) mainLine else objectLine
+                for (index in 0 until path.points.lastIndex) {
+                    val from = path.points[index]
+                    val to = path.points[index + 1]
+                    canvas.drawLine(
+                        mapX(from.x), mapY(from.y),
+                        mapX(to.x), mapY(to.y),
+                        paint
+                    )
                 }
             }
-
-            if (hit != null) {
-                val target = hit!!
-                val ghostX = target.x - dx * ballDiameter
-                val ghostY = target.y - dy * ballDiameter
-                canvas.drawLine(cueX, cueY, ghostX, ghostY, mainLine)
-                canvas.drawLine(ghostX, ghostY, target.x, target.y, ghostLine)
-
-                val objectRail = distanceToRail(target.x, target.y, dx, dy)
-                val objectEndX = target.x + dx * objectRail
-                val objectEndY = target.y + dy * objectRail
-                canvas.drawLine(target.x, target.y, objectEndX, objectEndY, objectLine)
-
-                val side = if ((target.x - cueX) * dy - (target.y - cueY) * dx >= 0f) 1f else -1f
-                val deflectAngle = Math.toRadians((24f + hitOffset * 18f).toDouble()) * side
-                val deflectX = (dx * kotlin.math.cos(deflectAngle) - dy * kotlin.math.sin(deflectAngle)).toFloat()
-                val deflectY = (dx * kotlin.math.sin(deflectAngle) + dy * kotlin.math.cos(deflectAngle)).toFloat()
-                val deflectDistance = distanceToRail(ghostX, ghostY, deflectX, deflectY)
-                canvas.drawLine(
-                    ghostX, ghostY,
-                    ghostX + deflectX * deflectDistance,
-                    ghostY + deflectY * deflectDistance,
-                    cueDeflectionLine
-                )
-            } else {
-                val railX = cueX + dx * railDistance
-                val railY = cueY + dy * railDistance
-                canvas.drawLine(cueX, cueY, railX, railY, mainLine)
-
-                // One-cushion rebound preview.
-                val hitVerticalRail = railX <= minX + 2f || railX >= maxX - 2f
-                val bounceX = if (hitVerticalRail) -dx else dx
-                val bounceY = if (hitVerticalRail) dy else -dy
-                val secondDistance = distanceToRail(railX, railY, bounceX, bounceY)
-                canvas.drawLine(
-                    railX, railY,
-                    railX + bounceX * secondDistance,
-                    railY + bounceY * secondDistance,
-                    objectLine
-                )
+            simulation.firstObjectHit?.let { hit ->
+                canvas.drawCircle(mapX(hit.x), mapY(hit.y), markerRadius * 1.25f, routePointPaint)
             }
         }
     }
