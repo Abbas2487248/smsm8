@@ -43,7 +43,7 @@ class AimOverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private class GuideView : View(this@AimOverlayService) {
+    private inner class GuideView : View(this@AimOverlayService) {
         private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(230, 70, 220, 255)
             strokeWidth = 4f
@@ -70,7 +70,6 @@ class AimOverlayService : Service() {
                 lineTo(width * 0.55f, height * 0.52f)
             }
             canvas.drawPath(bounce, bouncePaint)
-
             canvas.drawCircle(startX, startY, 10f, linePaint)
             canvas.drawCircle(endX, endY, 8f, bouncePaint)
         }
