@@ -31,6 +31,7 @@ class ScreenCaptureService : Service() {
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    private var lastAnalysisAt = 0L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) {
@@ -94,9 +95,21 @@ class ScreenCaptureService : Service() {
         imageReader?.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage()
             if (image != null) {
-                // Capture pipeline is verified by receiving frames; ball recognition is a later stage.
-                Log.d(TAG, "Screen frame received: ${image.width}x${image.height}")
-                image.close()
+                try {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (now - lastAnalysisAt >= 1000L) {
+                        lastAnalysisAt = now
+                        val result = TableVisionDetector.detect(image)
+                        val tableText = result.table?.let {
+                            "${it.left},${it.top}-${it.right},${it.bottom}"
+                        } ?: "not found"
+                        Log.i(TAG, "Vision: table=$tableText, ball candidates=${result.balls.size}, positions=${result.balls.take(20)}")
+                    }
+                } catch (error: Exception) {
+                    Log.e(TAG, "Frame analysis failed", error)
+                } finally {
+                    image.close()
+                }
             }
         }, Handler(Looper.getMainLooper()))
 
