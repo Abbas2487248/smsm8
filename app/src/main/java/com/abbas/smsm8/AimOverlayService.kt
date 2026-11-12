@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.util.Log
 
 class AimOverlayService : Service() {
     companion object {
@@ -63,6 +64,26 @@ class AimOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private inner class GuideView : View(this@AimOverlayService) {
+        private val tableDebug = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(190, 80, 255, 120)
+            strokeWidth = 3f
+            style = Paint.Style.STROKE
+        }
+        private val ballDebug = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(220, 255, 70, 210)
+            strokeWidth = 3.5f
+            style = Paint.Style.STROKE
+        }
+        private val cueDebug = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(255, 255, 255, 255)
+            strokeWidth = 5f
+            style = Paint.Style.STROKE
+        }
+        private val centerDebug = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(255, 255, 70, 70)
+            strokeWidth = 4f
+            style = Paint.Style.STROKE
+        }
         private val mainLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(245, 45, 220, 255)
             strokeWidth = 7f
@@ -88,21 +109,39 @@ class AimOverlayService : Service() {
             pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 9f), 0f)
         }
 
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            Log.i("smsm8-overlay", "Overlay size: ${w}x${h}")
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val frame = latestVision ?: return
             val table = frame.result.table ?: return
-            val cue = frame.result.cueBall ?: return
-            val direction = frame.result.aimDirection ?: return
-
             val sx = width.toFloat() / frame.imageWidth.coerceAtLeast(1)
             val sy = height.toFloat() / frame.imageHeight.coerceAtLeast(1)
             val left = table.left * sx
             val top = table.top * sy
             val right = table.right * sx
             val bottom = table.bottom * sy
+
+            // Diagnostic markers: verify detector coordinates before drawing shot guides.
+            canvas.drawRect(left, top, right, bottom, tableDebug)
+            val ballDiameter = (table.width() * sx / 16f).coerceAtLeast(8f)
+            val ballRadius = ballDiameter * 0.5f
+            for (ball in frame.result.balls) {
+                canvas.drawCircle(ball.x * sx, ball.y * sy, ballRadius, ballDebug)
+            }
+
+            val cue = frame.result.cueBall ?: return
             val cueX = cue.x * sx
             val cueY = cue.y * sy
+            canvas.drawCircle(cueX, cueY, ballRadius + 5f, cueDebug)
+            canvas.drawCircle(cueX, cueY, 3f, centerDebug)
+            canvas.drawLine(cueX - 12f, cueY, cueX + 12f, cueY, centerDebug)
+            canvas.drawLine(cueX, cueY - 12f, cueX, cueY + 12f, centerDebug)
+
+            val direction = frame.result.aimDirection ?: return
 
             var dx = direction.x
             var dy = direction.y
@@ -111,8 +150,6 @@ class AimOverlayService : Service() {
             dx /= length
             dy /= length
 
-            val ballDiameter = (table.width() * sx / 16f).coerceAtLeast(8f)
-            val ballRadius = ballDiameter * 0.5f
             val minX = left + ballRadius
             val maxX = right - ballRadius
             val minY = top + ballRadius
