@@ -65,27 +65,27 @@ class AimOverlayService : Service() {
     private inner class GuideView : View(this@AimOverlayService) {
         private val mainLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(245, 45, 220, 255)
-            strokeWidth = 4.5f
+            strokeWidth = 7f
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
         }
         private val objectLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(235, 255, 220, 55)
-            strokeWidth = 4f
+            strokeWidth = 6f
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
         }
         private val cueDeflectionLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(220, 255, 115, 75)
-            strokeWidth = 3.5f
+            strokeWidth = 5.5f
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
         }
         private val ghostLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(185, 255, 255, 255)
-            strokeWidth = 2.5f
+            strokeWidth = 4f
             style = Paint.Style.STROKE
-            pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 9f), 0f)
+            pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 9f), 0f)
         }
 
         override fun onDraw(canvas: Canvas) {
