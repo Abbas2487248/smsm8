@@ -2,6 +2,7 @@ package com.abbas.smsm8
 
 import android.app.Activity
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -10,6 +11,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 class MainActivity : Activity() {
+    private val captureRequestCode = 4103
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -19,12 +22,12 @@ class MainActivity : Activity() {
             setPadding(24, 32, 24, 16)
         }
         val info = TextView(this).apply {
-            text = "First step: allow display over other apps, then show the transparent guide overlay. Live ball tracking and screen analysis come in the next stage."
+            text = "المرحلة الحالية: اختبار الطبقة الشفافة وتجهيز التقاط الشاشة. تحليل الكرات ومساراتها سيأتي بعد التأكد من وصول الصورة."
             textSize = 16f
             setPadding(24, 8, 24, 24)
         }
-        val action = Button(this).apply {
-            text = "Enable overlay and show guide"
+        val overlayButton = Button(this).apply {
+            text = "إظهار خطوط الاختبار"
             setOnClickListener {
                 if (!Settings.canDrawOverlays(this@MainActivity)) {
                     val intent = Intent(
@@ -37,20 +40,44 @@ class MainActivity : Activity() {
                 }
             }
         }
+        val captureButton = Button(this).apply {
+            text = "السماح بالتقاط الشاشة"
+            setOnClickListener {
+                val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                startActivityForResult(manager.createScreenCaptureIntent(), captureRequestCode)
+            }
+        }
+        val stopButton = Button(this).apply {
+            text = "إيقاف التقاط الشاشة"
+            setOnClickListener {
+                stopService(Intent(this@MainActivity, ScreenCaptureService::class.java))
+            }
+        }
 
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 16, 16, 16)
             addView(title)
             addView(info)
-            addView(action)
+            addView(overlayButton)
+            addView(captureButton)
+            addView(stopButton)
         })
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (Settings.canDrawOverlays(this)) {
-            // User can tap the button to show the prototype overlay.
+    @Deprecated("Deprecated by Android; retained for compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == captureRequestCode && resultCode == RESULT_OK && data != null) {
+            val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+                putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
+                putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
         }
     }
 }
