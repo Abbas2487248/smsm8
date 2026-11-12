@@ -1,4 +1,4 @@
-package com.abbas.smsg8
+package com.abbas.smsm8
 
 import android.app.Service
 import android.content.Context
