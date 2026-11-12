@@ -24,7 +24,6 @@ object TableVisionDetector {
     private const val SAMPLE_STEP = 3
     private const val REQUIRED_FRAMES = 3
     private const val HUE_BINS = 36
-    private const val MAX_BALLS = 16
 
     @Synchronized
     fun detect(image: Image): Result {
@@ -247,9 +246,9 @@ object TableVisionDetector {
             }
         }
 
-        // Standard 8-ball has at most 16 balls. Keep the strongest spatial
-        // candidates so a transient speckle cannot make the count jump to 17.
-        val limitedCandidates = candidates.take(MAX_BALLS)
+        // Temporal matching and the stricter shape checks suppress transient
+        // candidates without arbitrarily dropping a real ball at the table edge.
+        val limitedCandidates = candidates
         val matchDistance = (expectedDiameter * SAMPLE_STEP * 0.55f).coerceAtLeast(10f)
         val usedPrevious = BooleanArray(previousTracks.size)
         val nextTracks = mutableListOf<Track>()
