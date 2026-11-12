@@ -55,7 +55,7 @@ class ScreenCaptureService : Service() {
         createNotificationChannel()
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("smsm8")
-            .setContentText("Screen capture is active")
+            .setContentText("Screen capture and table analysis are active")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setOngoing(true)
             .build()
@@ -97,13 +97,18 @@ class ScreenCaptureService : Service() {
             if (image != null) {
                 try {
                     val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastAnalysisAt >= 1000L) {
+                    if (now - lastAnalysisAt >= 500L) {
                         lastAnalysisAt = now
                         val result = TableVisionDetector.detect(image)
+                        AimOverlayService.updateVision(result, image.width, image.height)
+
                         val tableText = result.table?.let {
                             "${it.left},${it.top}-${it.right},${it.bottom}"
                         } ?: "not found"
-                        Log.i(TAG, "Vision: table=$tableText, ball candidates=${result.balls.size}, positions=${result.balls.take(20)}")
+                        Log.i(
+                            TAG,
+                            "Vision: table=$tableText, ball candidates=${result.balls.size}, positions=${result.balls.take(20)}"
+                        )
                     }
                 } catch (error: Exception) {
                     Log.e(TAG, "Frame analysis failed", error)
