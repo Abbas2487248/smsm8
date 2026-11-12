@@ -85,8 +85,10 @@ object TableVisionDetector {
         for (i in 0 until count) {
             var delta = abs(hues[i] - dominantHue)
             if (delta > 180f) delta = 360f - delta
-            cloth[i] = saturations[i] >= 0.20f &&
-                values[i] in 0.12f..0.98f && delta <= 22f
+            // Felt lighting and shadows can shift hue across the table.
+            // A wider hue tolerance keeps the full playing surface connected.
+            cloth[i] = saturations[i] >= 0.14f &&
+                values[i] in 0.10f..0.99f && delta <= 44f
         }
 
         // Largest connected region of the dominant cloth color is the table.
@@ -320,28 +322,14 @@ object TableVisionDetector {
             }
         }
 
-        // Shaft recognition is uncertain in some game themes. Keep it as the
-        // preferred direction, but fall back to the nearest object ball so the
-        // guide is still visible instead of disappearing completely.
-        val detectedDirection = cueBall?.let {
+        // Never guess the shot direction from the nearest object ball:
+        // that produces a convincing-looking but incorrect guide when the
+        // player is aiming elsewhere. Show no trajectory until the cue shaft
+        // is detected with sufficient confidence.
+        val aimDirection = cueBall?.let {
             estimateShotDirection(it, expectedDiameter * SAMPLE_STEP * 0.5f,
                 sampleWidth, sampleHeight, saturations, values, cloth)
         }
-        val nearestBallDirection = cueBall?.let { cue ->
-            stableBalls
-                .filter { it !== cue && (it.x != cue.x || it.y != cue.y) }
-                .minByOrNull { point ->
-                    val dx = point.x - cue.x
-                    val dy = point.y - cue.y
-                    dx * dx + dy * dy
-                }?.let { target ->
-                    val dx = target.x - cue.x
-                    val dy = target.y - cue.y
-                    val length = sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
-                    PointF(dx / length, dy / length)
-                }
-        }
-        val aimDirection = detectedDirection ?: nearestBallDirection
         return Result(table, stableBalls, cueBall, aimDirection)
     }
 
