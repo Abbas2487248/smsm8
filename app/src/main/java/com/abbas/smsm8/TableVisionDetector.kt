@@ -10,8 +10,9 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * Detects the dominant green cloth region, then looks for compact round
- * non-cloth components inside it. Temporal smoothing reduces overlay jitter.
+ * Detects a large, connected table-cloth region across different cloth colors,
+ * then looks for compact round non-cloth components inside it. Temporal
+ * smoothing reduces overlay jitter.
  */
 object TableVisionDetector {
     data class Result(val table: Rect?, val balls: List<PointF>)
@@ -32,7 +33,7 @@ object TableVisionDetector {
         val rowStride = plane.rowStride
         val sampleWidth = (image.width + SAMPLE_STEP - 1) / SAMPLE_STEP
         val sampleHeight = (image.height + SAMPLE_STEP - 1) / SAMPLE_STEP
-        val green = BooleanArray(sampleWidth * sampleHeight)
+        val cloth = BooleanArray(sampleWidth * sampleHeight)
 
         for (sy in 0 until sampleHeight) {
             val y = min(sy * SAMPLE_STEP, image.height - 1)
@@ -44,15 +45,19 @@ object TableVisionDetector {
                 val red = buffer.get(offset).toInt() and 0xff
                 val g = buffer.get(offset + 1).toInt() and 0xff
                 val blue = buffer.get(offset + 2).toInt() and 0xff
-                green[sy * sampleWidth + sx] =
-                    g > 42 && g > red * 1.08f && g > blue * 1.04f &&
-                    (g - red) > 12 && (g - blue) > 6
+                // Color-independent cloth mask: accept saturated fabric of any hue
+                // (green, blue, red, purple, etc.), not only green tables.
+                val high = max(red, max(g, blue))
+                val low = min(red, min(g, blue))
+                val chroma = high - low
+                cloth[sy * sampleWidth + sx] =
+                    high in 38..248 && chroma >= 18
             }
         }
 
-        // Use the largest connected green region, not isolated green pixels
+        // Use the largest connected colored-cloth region, not isolated green pixels
         // elsewhere on the screen, to estimate the playing surface.
-        val greenVisited = BooleanArray(green.size)
+        val greenVisited = BooleanArray(cloth.size)
         val queue = ArrayDeque<Int>()
         var bestArea = 0
         var minX = 0
@@ -61,7 +66,7 @@ object TableVisionDetector {
         var maxY = -1
 
         for (start in green.indices) {
-            if (!green[start] || greenVisited[start]) continue
+            if (!cloth[start] || greenVisited[start]) continue
             var area = 0
             var cMinX = start % sampleWidth
             var cMaxX = cMinX
@@ -85,7 +90,7 @@ object TableVisionDetector {
                     val ny = y + dy
                     if (nx !in 0 until sampleWidth || ny !in 0 until sampleHeight) continue
                     val next = ny * sampleWidth + nx
-                    if (green[next] && !greenVisited[next]) {
+                    if (cloth[next] && !greenVisited[next]) {
                         greenVisited[next] = true
                         queue.add(next)
                     }
@@ -150,7 +155,7 @@ object TableVisionDetector {
         for (startY in top..bottom) {
             for (startX in left..right) {
                 val start = startY * sampleWidth + startX
-                if (green[start] || visited[start]) continue
+                if (cloth[start] || visited[start]) continue
 
                 var area = 0
                 var cMinX = startX
@@ -176,7 +181,7 @@ object TableVisionDetector {
                         val ny = y + dy
                         if (nx !in left..right || ny !in top..bottom) continue
                         val next = ny * sampleWidth + nx
-                        if (!green[next] && !visited[next]) {
+                        if (!cloth[next] && !visited[next]) {
                             visited[next] = true
                             queue.add(next)
                         }
