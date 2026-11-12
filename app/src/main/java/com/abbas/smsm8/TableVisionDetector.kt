@@ -15,7 +15,7 @@ import kotlin.math.sqrt
 object TableVisionDetector {
     data class Result(val table: Rect?, val balls: List<PointF>)
 
-    private data class Track(val point: PointF, val hits: Int)
+    private data class Track(val point: PointF, val hits: Int, val missed: Int = 0)
     private var previousTracks: List<Track> = emptyList()
 
     private const val SAMPLE_STEP = 3
@@ -81,7 +81,7 @@ object TableVisionDetector {
         val queue = ArrayDeque<Int>()
 
         // A pool ball is roughly one twentieth of the playing-surface width.
-        val expectedDiameter = ((maxX - minX + 1) / 19f).coerceAtLeast(4f)
+        val expectedDiameter = ((maxX - minX + 1) / 40f).coerceAtLeast(3f)
         val minDiameter = (expectedDiameter * 0.55f).coerceAtLeast(3f)
         val maxDiameter = expectedDiameter * 1.55f
         val minArea = (expectedDiameter * expectedDiameter * 0.22f).toInt().coerceAtLeast(5)
@@ -131,7 +131,7 @@ object TableVisionDetector {
                 val ratio = boxWidth.toFloat() / boxHeight.toFloat()
                 val fill = area.toFloat() / (boxWidth * boxHeight).coerceAtLeast(1)
                 val diameter = (boxWidth + boxHeight) * 0.5f
-                val roundEnough = ratio in 0.72f..1.38f && fill >= 0.42f
+                val roundEnough = ratio in 0.78f..1.28f && fill >= 0.58f
                 val ballSized = diameter in minDiameter..maxDiameter &&
                     area in minArea..maxArea
 
@@ -146,9 +146,9 @@ object TableVisionDetector {
             }
         }
 
-        // Require a candidate to appear in consecutive frames near the same spot.
-        // This suppresses one-frame noise; it is not a substitute for image calibration.
-        val matchDistance = (expectedDiameter * SAMPLE_STEP * 0.8f).coerceAtLeast(10f)
+        // Match detections across frames. Keep a track briefly when one frame
+        // misses it, preventing flicker from small capture/lighting variations.
+        val matchDistance = (expectedDiameter * SAMPLE_STEP * 0.65f).coerceAtLeast(7f)
         val usedPrevious = BooleanArray(previousTracks.size)
         val nextTracks = mutableListOf<Track>()
         val stableBalls = mutableListOf<PointF>()
@@ -169,14 +169,30 @@ object TableVisionDetector {
                 }
             }
 
-            val hits = if (bestIndex >= 0 && bestDistance <= matchDistance) {
-                usedPrevious[bestIndex] = true
-                previousTracks[bestIndex].hits + 1
-            } else {
-                1
+            val matched = bestIndex >= 0 && bestDistance <= matchDistance
+            val oldTrack = if (matched) previousTracks[bestIndex] else null
+            if (matched) usedPrevious[bestIndex] = true
+            val hits = (oldTrack?.hits ?: 0) + 1
+            // Smooth the center to reduce small frame-to-frame jumps.
+            val point = if (oldTrack != null) {
+                PointF(
+                    oldTrack.point.x * 0.65f + candidate.x * 0.35f,
+                    oldTrack.point.y * 0.65f + candidate.y * 0.35f
+                )
+            } else candidate
+            nextTracks.add(Track(point, hits, 0))
+            if (hits >= REQUIRED_FRAMES) stableBalls.add(point)
+        }
+
+        // Retain unmatched confirmed detections for at most two frames.
+        for (i in previousTracks.indices) {
+            if (usedPrevious[i]) continue
+            val old = previousTracks[i]
+            val missed = old.missed + 1
+            if (old.hits >= REQUIRED_FRAMES && missed <= 2) {
+                nextTracks.add(Track(old.point, old.hits, missed))
+                stableBalls.add(old.point)
             }
-            nextTracks.add(Track(candidate, hits))
-            if (hits >= REQUIRED_FRAMES) stableBalls.add(candidate)
         }
 
         previousTracks = nextTracks
