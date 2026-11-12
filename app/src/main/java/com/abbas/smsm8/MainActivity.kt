@@ -17,17 +17,17 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         val title = TextView(this).apply {
-            text = "smsm8 — Aim Guide Prototype"
+            text = "smsm8 — Pool Aim Guide"
             textSize = 22f
             setPadding(24, 32, 24, 16)
         }
         val info = TextView(this).apply {
-            text = "المرحلة الحالية: اختبار الطبقة الشفافة وتجهيز التقاط الشاشة. تحليل الكرات ومساراتها سيأتي بعد التأكد من وصول الصورة."
+            text = "يوضح خطوط التصويب ومسار الكرة وارتدادها عند اكتشاف الكرة البيضاء وعصا التصويب."
             textSize = 16f
             setPadding(24, 8, 24, 24)
         }
         val overlayButton = Button(this).apply {
-            text = "إظهار خطوط الاختبار"
+            text = "تشغيل خطوط التصويب"
             setOnClickListener {
                 if (!Settings.canDrawOverlays(this@MainActivity)) {
                     val intent = Intent(
