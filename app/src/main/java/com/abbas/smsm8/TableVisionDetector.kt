@@ -65,7 +65,7 @@ object TableVisionDetector {
         var maxX = -1
         var maxY = -1
 
-        for (start in green.indices) {
+        for (start in cloth.indices) {
             if (!cloth[start] || greenVisited[start]) continue
             var area = 0
             var cMinX = start % sampleWidth
@@ -144,7 +144,7 @@ object TableVisionDetector {
         val top = (minY + marginY).coerceAtMost(maxY)
         val bottom = (maxY - marginY).coerceAtLeast(top)
 
-        val visited = BooleanArray(green.size)
+        val visited = BooleanArray(cloth.size)
         val candidates = mutableListOf<PointF>()
         val expectedDiameter = ((maxX - minX + 1) / 40f).coerceAtLeast(3f)
         val minDiameter = (expectedDiameter * 0.55f).coerceAtLeast(3f)
