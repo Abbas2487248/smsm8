@@ -118,25 +118,34 @@ class AimOverlayService : Service() {
             super.onDraw(canvas)
             val frame = latestVision ?: return
             val table = frame.result.table ?: return
+            // Capture coordinates are absolute display pixels. An overlay window can
+            // have a non-zero screen origin (status/navigation/cutout insets), so
+            // translate screen coordinates into this View's local canvas coordinates.
+            val screenOrigin = IntArray(2)
+            getLocationOnScreen(screenOrigin)
             val sx = width.toFloat() / frame.imageWidth.coerceAtLeast(1)
             val sy = height.toFloat() / frame.imageHeight.coerceAtLeast(1)
-            val left = table.left * sx
-            val top = table.top * sy
-            val right = table.right * sx
-            val bottom = table.bottom * sy
+            fun mapX(x: Float) = x * sx - screenOrigin[0]
+            fun mapY(y: Float) = y * sy - screenOrigin[1]
+            val left = mapX(table.left.toFloat())
+            val top = mapY(table.top.toFloat())
+            val right = mapX(table.right.toFloat())
+            val bottom = mapY(table.bottom.toFloat())
 
             // Diagnostic markers: verify detector coordinates before drawing shot guides.
             canvas.drawRect(left, top, right, bottom, tableDebug)
             val ballDiameter = (table.width() * sx / 16f).coerceAtLeast(8f)
+            // Keep diagnostic rings subtle; they mark centers, not the full ball.
+            val markerRadius = (ballDiameter * 0.30f).coerceIn(4f, 12f)
             val ballRadius = ballDiameter * 0.5f
             for (ball in frame.result.balls) {
-                canvas.drawCircle(ball.x * sx, ball.y * sy, ballRadius, ballDebug)
+                canvas.drawCircle(mapX(ball.x), mapY(ball.y), markerRadius, ballDebug)
             }
 
             val cue = frame.result.cueBall ?: return
-            val cueX = cue.x * sx
-            val cueY = cue.y * sy
-            canvas.drawCircle(cueX, cueY, ballRadius + 5f, cueDebug)
+            val cueX = mapX(cue.x)
+            val cueY = mapY(cue.y)
+            canvas.drawCircle(cueX, cueY, markerRadius + 2f, cueDebug)
             canvas.drawCircle(cueX, cueY, 3f, centerDebug)
             canvas.drawLine(cueX - 12f, cueY, cueX + 12f, cueY, centerDebug)
             canvas.drawLine(cueX, cueY - 12f, cueX, cueY + 12f, centerDebug)
@@ -170,8 +179,8 @@ class AimOverlayService : Service() {
             var hitDistance = Float.POSITIVE_INFINITY
             var hitOffset = 0f
             for (ball in balls) {
-                val bx = ball.x * sx
-                val by = ball.y * sy
+                val bx = mapX(ball.x)
+                val by = mapY(ball.y)
                 val vx = bx - cueX
                 val vy = by - cueY
                 val projection = vx * dx + vy * dy
