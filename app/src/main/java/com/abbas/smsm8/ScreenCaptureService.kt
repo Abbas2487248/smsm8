@@ -97,7 +97,7 @@ class ScreenCaptureService : Service() {
             if (image != null) {
                 try {
                     val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastAnalysisAt >= 500L) {
+                    if (now - lastAnalysisAt >= 250L) {
                         lastAnalysisAt = now
                         val result = TableVisionDetector.detect(image)
                         AimOverlayService.updateVision(result, image.width, image.height)
